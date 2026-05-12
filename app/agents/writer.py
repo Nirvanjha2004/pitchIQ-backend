@@ -169,26 +169,13 @@ Write one personalized cold email for each company above."""
         except (json.JSONDecodeError, ValueError):
             pass
 
-        # 2. Strip control characters and retry
+        # 2. Find the outermost JSON array or object in the text
         try:
-            import re
-            cleaned = re.sub(r'[\x00-\x1f\x7f]', lambda m: repr(m.group())[1:-1], text)
-            result = extract_emails(json.loads(cleaned))
-            if result:
-                return result
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        # 3. Find the outermost JSON array or object in the text
-        try:
-            import re
-            # Try to find a JSON array first
             arr_match = re.search(r'\[[\s\S]*\]', text)
             if arr_match:
                 result = extract_emails(json.loads(arr_match.group()))
                 if result:
                     return result
-            # Then try a JSON object
             obj_match = re.search(r'\{[\s\S]*\}', text)
             if obj_match:
                 result = extract_emails(json.loads(obj_match.group()))
@@ -197,18 +184,52 @@ Write one personalized cold email for each company above."""
         except (json.JSONDecodeError, ValueError):
             pass
 
-        # 4. Last resort: extract individual JSON objects that contain "body"
+        # 3. Use json_repair if available, otherwise manual newline fix
         try:
-            import re
-            objects = re.findall(r'\{[^{}]*"body"[^{}]*\}', text, re.DOTALL)
+            # Fix unescaped newlines inside JSON string values — the most
+            # common failure mode when the LLM puts literal \n in body text.
+            # Strategy: inside string values, replace bare newlines with \\n
+            fixed = re.sub(
+                r'("(?:[^"\\]|\\.)*")',
+                lambda m: m.group(0).replace('\n', '\\n').replace('\r', '\\r'),
+                text,
+                flags=re.DOTALL,
+            )
+            result = extract_emails(json.loads(fixed))
+            if result:
+                return result
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # 4. Last resort: extract individual JSON objects that contain "body"
+        # using a more permissive approach that handles nested braces
+        try:
             emails = []
-            for obj in objects:
-                try:
-                    e = json.loads(obj)
-                    if "body" in e:
-                        emails.append(e)
-                except Exception:
-                    pass
+            depth = 0
+            start = None
+            for i, ch in enumerate(text):
+                if ch == '{':
+                    if depth == 0:
+                        start = i
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0 and start is not None:
+                        chunk = text[start:i+1]
+                        try:
+                            # Try fixing newlines in this chunk too
+                            fixed_chunk = re.sub(
+                                r'("(?:[^"\\]|\\.)*")',
+                                lambda m: m.group(0).replace('\n', '\\n').replace('\r', '\\r'),
+                                chunk,
+                                flags=re.DOTALL,
+                            )
+                            e = json.loads(fixed_chunk)
+                            if isinstance(e, dict) and "body" in e:
+                                emails.append(e)
+                        except Exception:
+                            pass
+                        start = None
             if emails:
                 return emails
         except Exception:
