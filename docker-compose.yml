@@ -10,7 +10,6 @@ services:
       - "8000:8000"
     env_file:
       - .env
-    # No volume mount in production — code is baked into the image
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -28,12 +27,10 @@ services:
     deploy:
       resources:
         limits:
-          # t3.micro has 1 GiB RAM — keep the container well under that
           memory: 768M
         reservations:
           memory: 256M
 
-  # Nginx reverse proxy — terminates TLS, forwards to backend
   nginx:
     image: nginx:1.27-alpine
     container_name: pitchiq-nginx
@@ -44,7 +41,6 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      # Certbot managed certificates (Let's Encrypt)
       - certbot-www:/var/www/certbot:ro
       - certbot-certs:/etc/letsencrypt:ro
     depends_on:
@@ -56,15 +52,12 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Certbot — obtains and renews Let's Encrypt TLS certificates
   certbot:
     image: certbot/certbot:latest
     container_name: pitchiq-certbot
     volumes:
       - certbot-www:/var/www/certbot
       - certbot-certs:/etc/letsencrypt
-    # Run once on startup; a cron job (or systemd timer) should call
-    # `docker compose run --rm certbot renew` every 60 days.
     entrypoint: >
       sh -c "certbot certonly --webroot --webroot-path=/var/www/certbot
              --email $${CERTBOT_EMAIL} --agree-tos --no-eff-email
