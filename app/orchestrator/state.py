@@ -115,7 +115,7 @@ class StateManager:
         import json
         from sqlalchemy import text as sa_text
         await db.execute(
-            sa_text("UPDATE agent_tasks SET plan=:plan::jsonb, updated_at=NOW() WHERE id=:id"),
+            sa_text("UPDATE agent_tasks SET plan=CAST(:plan AS jsonb), updated_at=NOW() WHERE id=:id"),
             {"plan": json.dumps(plan), "id": task_id},
         )
         await db.commit()
@@ -192,8 +192,10 @@ class StateManager:
         from sqlalchemy import text as sa_text
         await db.execute(
             sa_text(
-                "UPDATE agent_tasks SET status='completed', final_output=:output::jsonb, "
-                "total_cost_usd=:cost, total_tokens=:tokens, updated_at=NOW() WHERE id=:id"
+                "UPDATE agent_tasks SET status='completed', "
+                "final_output=CAST(:output AS jsonb), "
+                "total_cost_usd=:cost, total_tokens=:tokens, updated_at=NOW() "
+                "WHERE id=:id"
             ),
             {
                 "output": json.dumps(final_output),
