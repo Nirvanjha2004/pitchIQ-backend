@@ -90,13 +90,20 @@ class StateManager:
         error_message: Optional[str] = None,
     ) -> None:
         """Update task status."""
-        task = await db.get(AgentTask, task_id)
-        if task:
-            task.status = status
-            if error_message:
-                task.error_message = error_message
-            await db.commit()
-            logger.info("Task %s status: %s", task_id, status)
+        from sqlalchemy import text as sa_text
+        params: Dict[str, Any] = {"status": status, "id": task_id}
+        if error_message:
+            await db.execute(
+                sa_text("UPDATE agent_tasks SET status=:status, error_message=:err, updated_at=NOW() WHERE id=:id"),
+                {**params, "err": error_message},
+            )
+        else:
+            await db.execute(
+                sa_text("UPDATE agent_tasks SET status=:status, updated_at=NOW() WHERE id=:id"),
+                params,
+            )
+        await db.commit()
+        logger.info("Task %s status: %s", task_id, status)
 
     @staticmethod
     async def save_plan(
@@ -105,11 +112,14 @@ class StateManager:
         db: AsyncSession,
     ) -> None:
         """Save planner output."""
-        task = await db.get(AgentTask, task_id)
-        if task:
-            task.plan = plan
-            await db.commit()
-            logger.info("Saved plan for task %s", task_id)
+        import json
+        from sqlalchemy import text as sa_text
+        await db.execute(
+            sa_text("UPDATE agent_tasks SET plan=:plan::jsonb, updated_at=NOW() WHERE id=:id"),
+            {"plan": json.dumps(plan), "id": task_id},
+        )
+        await db.commit()
+        logger.info("Saved plan for task %s", task_id)
 
     @staticmethod
     async def save_agent_output(
@@ -156,7 +166,18 @@ class StateManager:
     @staticmethod
     async def get_task(task_id: str, db: AsyncSession) -> Optional[AgentTask]:
         """Get full task object."""
-        return await db.get(AgentTask, task_id)
+        from sqlalchemy import text as sa_text
+        result = await db.execute(
+            sa_text("SELECT * FROM agent_tasks WHERE id = :id"),
+            {"id": task_id},
+        )
+        row = result.mappings().fetchone()
+        if not row:
+            return None
+        task = AgentTask()
+        for key, value in row.items():
+            setattr(task, key, value)
+        return task
 
     @staticmethod
     async def complete_task(
@@ -167,19 +188,22 @@ class StateManager:
         db: AsyncSession,
     ) -> None:
         """Mark task as completed with final output."""
-        task = await db.get(AgentTask, task_id)
-        if task:
-            task.status = "completed"
-            task.final_output = final_output
-            task.total_cost_usd = total_cost_usd
-            task.total_tokens = total_tokens
-            await db.commit()
-            logger.info(
-                "Task %s completed: cost=$%.4f, tokens=%d",
-                task_id,
-                total_cost_usd,
-                total_tokens,
-            )
+        import json
+        from sqlalchemy import text as sa_text
+        await db.execute(
+            sa_text(
+                "UPDATE agent_tasks SET status='completed', final_output=:output::jsonb, "
+                "total_cost_usd=:cost, total_tokens=:tokens, updated_at=NOW() WHERE id=:id"
+            ),
+            {
+                "output": json.dumps(final_output),
+                "cost": total_cost_usd,
+                "tokens": total_tokens,
+                "id": task_id,
+            },
+        )
+        await db.commit()
+        logger.info("Task %s completed: cost=$%.4f, tokens=%d", task_id, total_cost_usd, total_tokens)
 
     @staticmethod
     async def fail_task(
@@ -187,14 +211,15 @@ class StateManager:
         error_message: str,
         db: AsyncSession,
     ) -> None:
-        """Mark task as failed — rolls back any aborted transaction first."""
+        """Mark task as failed."""
+        from sqlalchemy import text as sa_text
         try:
-            await db.rollback()  # Clear any aborted transaction state
-            task = await db.get(AgentTask, task_id)
-            if task:
-                task.status = "failed"
-                task.error_message = error_message
-                await db.commit()
+            await db.rollback()
+            await db.execute(
+                sa_text("UPDATE agent_tasks SET status='failed', error_message=:err, updated_at=NOW() WHERE id=:id"),
+                {"err": error_message, "id": task_id},
+            )
+            await db.commit()
             logger.error("Task %s failed: %s", task_id, error_message)
         except Exception as exc:
             logger.error("Could not mark task %s as failed: %s", task_id, exc)
