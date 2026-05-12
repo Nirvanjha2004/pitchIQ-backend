@@ -18,9 +18,10 @@ engine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
     future=True,
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10,
+    # pool_pre_ping=True,
+    # pool_size=5,
+    # max_overflow=10,
+    poolclass=NullPool,
     # Supabase Transaction pooler (pgbouncer) does not support prepared statements.
     # statement_cache_size=0 disables them in asyncpg.
     connect_args={
