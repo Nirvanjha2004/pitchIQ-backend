@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"  # allow deployment vars (DOMAIN, CERTBOT_EMAIL) in .env
 
 
 settings = Settings()
